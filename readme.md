@@ -33,7 +33,7 @@ The application follows a multi-stage process to answer a user's question, ensur
 ```mermaid
 graph TD
     A[User Query] --> B{LLM: HyDE<br>Generate Hypothetical Answer};
-    B --> C[Vector Search<br>Retrieve Top 20 Candidates from Code & Doc Indexes};
+    B --> C[Vector Search<br>Retrieve Top 20 Candidates from Code and Doc Indexes];
     C --> D{Cross-Encoder<br><b>Re-rank</b> Candidates based on relevance to Original Query};
     D --> E[Top 5 Best Context Snippets];
     E --> F{LLM: Generation<br><b>Multi-Message Prompt</b><br>Answer question using best snippets};
