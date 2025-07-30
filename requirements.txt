@@ -1,0 +1,17 @@
+customtkinter
+sentence-transformers
+faiss-cpu
+markdown-it-py
+numpy
+pypdf
+python-docx
+openpyxl
+pywin32 ; sys_platform == 'win32'
+requests
+langdetect
+tree-sitter<=0.24.0
+tree-sitter-python
+tree-sitter-javascript
+tree-sitter-java
+tree-sitter-go
+tree-sitter-cpp
