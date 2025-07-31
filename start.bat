@@ -2,27 +2,73 @@
 setlocal
 title Local RAG Engine Launcher
 
-REM Define the name for the virtual environment directory
-set VENV_DIR=.venv
+REM --- Configuration ---
+set PYTHON_VERSION=3.12.4
+set PYTHON_DIR=.\python-embed
+set VENV_DIR=.\.venv
+set PYTHON_URL=https://www.python.org/ftp/python/%PYTHON_VERSION%/python-%PYTHON_VERSION%-embed-amd64.zip
+set PYTHON_ZIP_NAME=python-embed.zip
+set PIP_URL=https://bootstrap.pypa.io/get-pip.py
 
 ECHO.
-ECHO --- Local RAG Engine Launcher ---
+ECHO --- Self-Contained Local RAG Engine Launcher (Python %PYTHON_VERSION%) ---
 ECHO.
 
-REM Check if Python is available
-python --version >nul 2>nul
-if %errorlevel% neq 0 (
-    ECHO ERROR: Python is not found in your system's PATH.
-    ECHO Please install Python 3.8-3.11 and ensure it's added to PATH.
-    pause
-    exit /b
+REM --- Step 1: Check for and Download Portable Python ---
+if exist "%PYTHON_DIR%\python.exe" (
+    ECHO Found local Python %PYTHON_VERSION%.
+) ELSE (
+    ECHO Local Python not found. Downloading version %PYTHON_VERSION%...
+    ECHO This will only happen once.
+    powershell -Command "Invoke-WebRequest -Uri %PYTHON_URL% -OutFile %PYTHON_ZIP_NAME%"
+    if %errorlevel% neq 0 (
+        ECHO ERROR: Failed to download Python. Check your internet connection.
+        del %PYTHON_ZIP_NAME% >nul 2>nul
+        pause
+        exit /b
+    )
+
+    ECHO Unpacking Python...
+    powershell -Command "Expand-Archive -Path .\%PYTHON_ZIP_NAME% -DestinationPath .\%PYTHON_DIR% -Force"
+    if %errorlevel% neq 0 (
+        ECHO ERROR: Failed to unpack Python.
+        del %PYTHON_ZIP_NAME% >nul 2>nul
+        pause
+        exit /b
+    )
+    del %PYTHON_ZIP_NAME%
 )
 
-REM Step 1: Check for and create the virtual environment
+REM --- Step 2: Ensure pip is installed in the embedded Python ---
+if not exist "%PYTHON_DIR%\Scripts\pip.exe" (
+    ECHO Pip not found. Installing pip...
+
+    REM The embeddable package needs a ._pth file to enable site-packages for pip
+    ECHO import site > "%PYTHON_DIR%\python312._pth"
+
+    powershell -Command "Invoke-WebRequest -Uri %PIP_URL% -OutFile get-pip.py"
+    if %errorlevel% neq 0 (
+        ECHO ERROR: Failed to download get-pip.py.
+        del get-pip.py >nul 2>nul
+        pause
+        exit /b
+    )
+
+    "%PYTHON_DIR%\python.exe" get-pip.py
+    if %errorlevel% neq 0 (
+        ECHO ERROR: Failed to install pip.
+        del get-pip.py >nul 2>nul
+        pause
+        exit /b
+    )
+    del get-pip.py
+)
+
+REM --- Step 3: Create Virtual Environment using the embedded Python ---
 ECHO [1/4] Checking for virtual environment...
 if not exist "%VENV_DIR%\Scripts\activate.bat" (
     ECHO Virtual environment not found. Creating one...
-    python -m venv %VENV_DIR%
+    "%PYTHON_DIR%\python.exe" -m venv %VENV_DIR%
     if %errorlevel% neq 0 (
         ECHO ERROR: Failed to create virtual environment.
         pause
@@ -32,18 +78,18 @@ if not exist "%VENV_DIR%\Scripts\activate.bat" (
     ECHO Virtual environment found.
 )
 
-REM Step 2: Activate environment and install dependencies
+REM --- Step 4: Activate and Install Dependencies ---
 ECHO.
 ECHO [2/4] Activating virtual environment and installing dependencies...
 call "%VENV_DIR%\Scripts\activate.bat"
 pip install -r requirements.txt
 if %errorlevel% neq 0 (
-    ECHO ERROR: Failed to install dependencies from requirements.txt.
+    ECHO ERROR: Failed to install dependencies from requirements.txt. Please ensure PyTorch for your CUDA version is correctly specified or removed.
     pause
     exit /b
 )
 
-REM Step 3: Check for and download models
+REM --- Step 5: Download Models ---
 ECHO.
 ECHO [3/4] Checking for local models...
 if not exist ".\models\BAAI_bge-m3" (
@@ -58,7 +104,7 @@ if not exist ".\models\BAAI_bge-m3" (
     ECHO Models found locally.
 )
 
-REM Step 4: Launch the application
+REM --- Step 6: Launch Application ---
 ECHO.
 ECHO [4/4] Starting the RAG Application...
 ECHO.

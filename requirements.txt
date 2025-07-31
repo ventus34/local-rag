@@ -1,17 +1,27 @@
 customtkinter
 sentence-transformers
-faiss-cpu
+chromadb
 markdown-it-py
-numpy
-pypdf
-python-docx
-openpyxl
-pywin32 ; sys_platform == 'win32'
+langchain
+langchain-community
+langchain-experimental
+langchain-huggingface
 requests
 langdetect
+openpyxl
+pypdf
+python-docx
+pydocx
+html2text
+numpy
 tree-sitter<=0.24.0
 tree-sitter-python
 tree-sitter-javascript
 tree-sitter-java
 tree-sitter-go
 tree-sitter-cpp
+tree-sitter-typescript
+# --- Pytorch placeholder - INSTALL MANUALLY FOR CUDA ---
+# User-installed PyTorch for CUDA
+# Example for CUDA 12.1:
+# torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121

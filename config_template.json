@@ -1,0 +1,18 @@
+{
+    "models": {
+        "code_model_path": "jinaai/jina-embeddings-v2-base-code",
+        "docs_model_path": "BAAI/bge-m3",
+        "reranker_model_path": "BAAI/bge-reranker-large"
+    },
+    "endpoints": {
+        "lm_studio_url": "http://localhost:1234/v1/chat/completions",
+        "ollama_url": "http://localhost:11434"
+    },
+    "default_model": "local-model",
+    "project_paths": {
+    },
+    "hardware": {
+        "device": "GPU (CUDA)",
+        "fp16": true
+    }
+}
