@@ -194,7 +194,13 @@ class HybridRAGQueryEngine:
             return chunks[:top_k]
 
         pairs = [(query, chunk['text']) for chunk in chunks]
-        scores = self.reranker.predict(pairs, show_progress_bar=False)
+
+        # Process pairs one by one to avoid batch size issues with no padding token
+        scores = []
+        for pair in pairs:
+            score = self.reranker.predict([pair], show_progress_bar=False)
+            scores.append(score[0] if isinstance(score, list) else score)
+
         self._unload_model('reranker')
 
         scored_chunks = sorted(zip(scores, chunks), key=lambda x: x[0], reverse=True)
@@ -202,44 +208,82 @@ class HybridRAGQueryEngine:
 
     def generate_final_answer(self, context: list, history: list, llm_url: str, lang: str, model_name: str) -> Iterator[
         str]:
-        """Generates a final answer as a stream, using an improved prompt structure."""
+        """Generates a final answer as a stream, using an improved prompt structure with enhanced snippet presentation."""
 
-        # --- NEW: Improved System Prompt ---
-        system_prompt = f"""You are an expert-level technical AI assistant.
-Your persona is helpful, precise, and professional.
-You will be given a conversation history and a set of context snippets extracted from a knowledge base.
-Your task is to synthesize the information from the context to answer the user's latest question.
-Follow these rules:
-1. Base your answer **only** on the provided context snippets and conversation history. Do not use any outside knowledge.
-2. If the context does not contain the answer, state that you cannot find the information in the provided documents.
-3. Synthesize a concise, clear, and comprehensive answer in well-formatted Markdown.
-4. You MUST write your entire response in the following language: **{lang}**
-"""
+        # --- Enhanced System Prompt for Better Code/Document Snippet Integration ---
+        system_prompt = f"""You are an expert-level technical AI assistant specializing in code analysis and documentation.
+    Your persona is helpful, precise, and professional.
+    You will be given a conversation history and a set of context snippets extracted from a knowledge base.
+    Your task is to synthesize the information from the context to answer the user's latest question.
+
+    Follow these rules:
+    1. Base your answer **only** on the provided context snippets and conversation history. Do not use any outside knowledge.
+    2. If the context does not contain the answer, state that you cannot find the information in the provided documents.
+    3. When referencing code or documentation, **always include relevant snippets** from the context in properly formatted code blocks or quotes.
+    4. Use appropriate syntax highlighting for code snippets (```python, ```javascript, etc.).
+    5. When showing file excerpts, include the file path as a comment or caption.
+    6. Structure your response with clear sections: explanation, relevant code/documentation snippets, and practical examples when applicable.
+    7. For code-related questions, prioritize showing actual implementation details from the codebase.
+    8. For documentation questions, quote relevant sections and provide context about their usage.
+    9. Synthesize a comprehensive answer in well-formatted Markdown with proper headings, code blocks, and emphasis.
+    10. You MUST write your entire response in the following language: **{lang}**
+    """
 
         messages = [{"role": "system", "content": system_prompt}]
 
         # Add conversation history (excluding the last user message which is the current question)
         messages.extend(history[:-1])
 
-        # --- NEW: Consolidate context into a single block ---
+        # --- Enhanced Context Consolidation with Source Metadata ---
         context_str_parts = []
+        source_files = set()
+
         for i, item in enumerate(context):
-            context_str_parts.append(f"--- CONTEXT SNIPPET {i + 1} (from: {item['source']}) ---\n{item['text']}")
+            source = item['source']
+            source_files.add(source)
+
+            # Determine if this is likely code or documentation based on file extension
+            file_ext = source.split('.')[-1].lower() if '.' in source else ''
+            content_type = "CODE" if file_ext in ['py', 'js', 'java', 'cpp', 'c', 'h', 'ts', 'go', 'rs', 'php', 'rb',
+                                                  'cs'] else "DOCUMENT"
+
+            context_str_parts.append(f"--- {content_type} SNIPPET {i + 1} (from: {source}) ---\n{item['text']}")
 
         consolidated_context = "\n\n".join(context_str_parts)
 
-        final_user_prompt = f"""Here is the context I have retrieved:
+        # Create source summary for better context awareness
+        source_summary = f"Available sources ({len(source_files)} files): {', '.join(sorted(source_files))}"
 
-<CONTEXT>
-{consolidated_context}
-</CONTEXT>
+        final_user_prompt = f"""Here is the context I have retrieved from the knowledge base:
 
-Based on the conversation history and the context provided above, please answer this question:
+    {source_summary}
 
-"{history[-1]['content']}"
-"""
+    <CONTEXT>
+    {consolidated_context}
+    </CONTEXT>
+
+    Based on the conversation history and the context provided above, please answer this question comprehensively.
+    Include relevant code snippets or documentation excerpts in your response with proper formatting.
+
+    Question: "{history[-1]['content']}"
+
+    Instructions for your response:
+    - Start with a clear explanation
+    - Include relevant code/document snippets with proper formatting
+    - Use appropriate language syntax highlighting for code blocks
+    - Reference specific files when showing snippets
+    - Provide practical context and usage examples when applicable
+    """
 
         messages.append({"role": "user", "content": final_user_prompt})
+
+        # Log the full messages payload before sending to LLM
+        logging.info(f"Sending messages to LLM ({model_name}):")
+        for msg in messages:
+            logging.info(
+                f"  Role: {msg['role']}, Content (first 200 chars): {msg['content'][:200].replace('\\n', ' ')}...")
+        logging.info(f"Full messages payload size: {len(json.dumps(messages))} bytes")
+        logging.info(f"Context sources: {', '.join(sorted(source_files))}")
 
         yield from self._call_llm_stream(messages, llm_url, model_name)
 

@@ -24,43 +24,88 @@ logging.getLogger("transformers.modeling_utils").setLevel(logging.ERROR)
 logging.getLogger("chromadb").setLevel(logging.ERROR)
 
 # --- Dynamically load tree-sitter languages ---
+
+# --- Dynamically load tree-sitter languages ---
 SUPPORTED_LANGUAGES = {}
 try:
     from tree_sitter_python import language as python_language
+    lang_obj = python_language() if callable(python_language) else python_language
+    # Ensure we have a proper Language object
+    if not isinstance(lang_obj, Language):
+        if hasattr(lang_obj, '__class__') and 'PyCapsule' in str(type(lang_obj)):
+            SUPPORTED_LANGUAGES['python'] = Language(lang_obj)
+        else:
+            print(f"Warning: Unexpected python language object type: {type(lang_obj)}")
+    else:
+        SUPPORTED_LANGUAGES['python'] = lang_obj
+except (ImportError, Exception) as e:
+    print(f"Warning: tree-sitter-python not available. {e}")
 
-    SUPPORTED_LANGUAGES['python'] = python_language
-except ImportError:
-    print("Warning: tree-sitter-python not installed.")
 try:
     from tree_sitter_javascript import language as js_language
+    lang_obj = js_language() if callable(js_language) else js_language
+    if not isinstance(lang_obj, Language):
+        if hasattr(lang_obj, '__class__') and 'PyCapsule' in str(type(lang_obj)):
+            SUPPORTED_LANGUAGES['javascript'] = Language(lang_obj)
+        else:
+            print(f"Warning: Unexpected javascript language object type: {type(lang_obj)}")
+    else:
+        SUPPORTED_LANGUAGES['javascript'] = lang_obj
+except (ImportError, Exception) as e:
+    print(f"Warning: tree-sitter-javascript not available. {e}")
 
-    SUPPORTED_LANGUAGES['javascript'] = js_language
-except ImportError:
-    print("Warning: tree-sitter-javascript not installed.")
 try:
     from tree_sitter_java import language as java_language
+    lang_obj = java_language() if callable(java_language) else java_language
+    if not isinstance(lang_obj, Language):
+        if hasattr(lang_obj, '__class__') and 'PyCapsule' in str(type(lang_obj)):
+            SUPPORTED_LANGUAGES['java'] = Language(lang_obj)
+        else:
+            print(f"Warning: Unexpected java language object type: {type(lang_obj)}")
+    else:
+        SUPPORTED_LANGUAGES['java'] = lang_obj
+except (ImportError, Exception) as e:
+    print(f"Warning: tree-sitter-java not available. {e}")
 
-    SUPPORTED_LANGUAGES['java'] = java_language
-except ImportError:
-    print("Warning: tree-sitter-java not installed.")
 try:
     from tree_sitter_go import language as go_language
+    lang_obj = go_language() if callable(go_language) else go_language
+    if not isinstance(lang_obj, Language):
+        if hasattr(lang_obj, '__class__') and 'PyCapsule' in str(type(lang_obj)):
+            SUPPORTED_LANGUAGES['go'] = Language(lang_obj)
+        else:
+            print(f"Warning: Unexpected go language object type: {type(lang_obj)}")
+    else:
+        SUPPORTED_LANGUAGES['go'] = lang_obj
+except (ImportError, Exception) as e:
+    print(f"Warning: tree-sitter-go not available. {e}")
 
-    SUPPORTED_LANGUAGES['go'] = go_language
-except ImportError:
-    print("Warning: tree-sitter-go not installed.")
 try:
     from tree_sitter_cpp import language as cpp_language
+    lang_obj = cpp_language() if callable(cpp_language) else cpp_language
+    if not isinstance(lang_obj, Language):
+        if hasattr(lang_obj, '__class__') and 'PyCapsule' in str(type(lang_obj)):
+            SUPPORTED_LANGUAGES['cpp'] = Language(lang_obj)
+        else:
+            print(f"Warning: Unexpected cpp language object type: {type(lang_obj)}")
+    else:
+        SUPPORTED_LANGUAGES['cpp'] = lang_obj
+except (ImportError, Exception) as e:
+    print(f"Warning: tree-sitter-cpp not available. {e}")
 
-    SUPPORTED_LANGUAGES['cpp'] = cpp_language
-except ImportError:
-    print("Warning: tree-sitter-cpp not installed.")
 try:
     from tree_sitter_typescript import typescript as ts_language
+    lang_obj = ts_language() if callable(ts_language) else ts_language
+    if not isinstance(lang_obj, Language):
+        if hasattr(lang_obj, '__class__') and 'PyCapsule' in str(type(lang_obj)):
+            SUPPORTED_LANGUAGES['typescript'] = Language(lang_obj)
+        else:
+            print(f"Warning: Unexpected typescript language object type: {type(lang_obj)}")
+    else:
+        SUPPORTED_LANGUAGES['typescript'] = lang_obj
+except (ImportError, Exception) as e:
+    print(f"Warning: tree-sitter-typescript not available. {e}")
 
-    SUPPORTED_LANGUAGES['typescript'] = ts_language
-except ImportError:
-    print("Warning: tree-sitter-typescript not installed.")
 
 
 def recursive_character_text_splitter(text: str, chunk_size: int = 768, chunk_overlap: int = 100) -> List[str]:
@@ -99,11 +144,58 @@ def chunk_code_with_tree_sitter(file_path: str, content: str, log_callback: Call
     if lang_name and lang_name in SUPPORTED_LANGUAGES and lang_name in queries:
         try:
             language = SUPPORTED_LANGUAGES[lang_name]
+
+            # Validate that we have a proper Language object
+            if not isinstance(language, Language):
+                log_callback(f"Invalid language object for {lang_name}, falling back to recursive split.")
+                return recursive_character_text_splitter(content, chunk_size, chunk_overlap)
+
             parser = Parser()
-            parser.language = language
+
+            # Try both set_language and direct assignment for compatibility
+            try:
+                parser.set_language(language)
+            except (AttributeError, TypeError):
+                try:
+                    parser.language = language
+                except Exception:
+                    log_callback(f"Could not set language for parser with {file_path}, using recursive split.")
+                    return recursive_character_text_splitter(content, chunk_size, chunk_overlap)
+
             tree = parser.parse(bytes(content, "utf8"))
             query = language.query(queries[lang_name])
-            captures = query.captures(tree.root_node)
+
+            # Handle different tree-sitter API versions
+            captures = []
+            try:
+                # Try the current API - query.captures()
+                captures_result = query.captures(tree.root_node)
+                # Handle both tuple and object formats
+                for item in captures_result:
+                    if isinstance(item, tuple):
+                        captures.append(item)
+                    elif hasattr(item, 'node') and hasattr(item, 'name'):
+                        captures.append((item.node, item.name))
+                    else:
+                        # Try to extract from match objects
+                        if hasattr(item, 'captures'):
+                            for capture in item.captures:
+                                captures.append((capture.node, capture.name))
+            except AttributeError:
+                try:
+                    # Try the matches API
+                    matches = query.matches(tree.root_node)
+                    for match in matches:
+                        if hasattr(match, 'captures'):
+                            for capture in match.captures:
+                                captures.append((capture.node, capture.name))
+                        elif isinstance(match, dict) and 'captures' in match:
+                            for capture in match['captures']:
+                                captures.append((capture['node'], capture['name']))
+                except (AttributeError, TypeError):
+                    # If all APIs fail, fall back to recursive splitting
+                    log_callback(f"Tree-sitter API incompatible for {file_path}, using recursive split.")
+                    return recursive_character_text_splitter(content, chunk_size, chunk_overlap)
 
             if not captures:
                 log_callback(f"Tree-sitter found no major constructs in {file_path}, using recursive split.")
@@ -236,7 +328,7 @@ def run_indexing_logic(
 
     def process_files_in_batches(files: List[str], resource_type: str, model_name: str, chunking_function: Callable):
         """Helper function to process a list of files in memory-safe batches."""
-        file_batch_size = 10
+        file_batch_size = 50
         total_files = len(files)
 
         collection_name = f"{project_name}-{resource_type}"

@@ -348,30 +348,113 @@ class RAGApp(ctk.CTk):
         """Adds a message or status widget to the chat frame."""
         if self.chat_widgets and self.chat_widgets[-1].winfo_children():
             last_widget_label = self.chat_widgets[-1].winfo_children()[0]
-            if isinstance(last_widget_label, ctk.CTkLabel) and last_widget_label.cget("text").startswith("Processing..."):
+            if isinstance(last_widget_label, (ctk.CTkLabel, ctk.CTkTextbox)) and (
+            "Processing..." in last_widget_label.cget("text") if isinstance(last_widget_label,
+                                                                            ctk.CTkLabel) else "Processing..." in last_widget_label.get(
+                    "1.0", "end")):
                 self.chat_widgets.pop().destroy()
 
         justify, anchor, fg_color = ("left", "w", "#3A3A3A") if role == "assistant" else ("right", "e", "#2C4B8F")
 
         frame = ctk.CTkFrame(self.chat_frame, fg_color="transparent")
-        msg_bubble = ctk.CTkLabel(frame, text=message, wraplength=550, justify=justify, fg_color=fg_color,
-                                  corner_radius=10, padx=10, pady=5)
 
-        if is_status: msg_bubble.configure(fg_color="#4A4A4A", text_color="#B0B0B0")
+        # Use CTkTextbox instead of CTkLabel for better text handling
+        msg_bubble = ctk.CTkTextbox(frame, height=1, wrap="word", fg_color=fg_color,
+                                    corner_radius=10, font=("", 12))
 
-        msg_bubble.pack(anchor=anchor, pady=2, padx=10);
+        # Configure the textbox
+        msg_bubble.insert("1.0", message)
+        msg_bubble.configure(state="disabled")  # Make it read-only
+
+        if is_status:
+            msg_bubble.configure(fg_color="#4A4A4A", text_color="#B0B0B0")
+
+        msg_bubble.pack(anchor=anchor, pady=2, padx=10, fill="x")
         frame.pack(fill="x", expand=True)
         self.chat_widgets.append(frame)
+
+        # Auto-resize the textbox based on content
+        self.after(10, lambda: self._resize_textbox(msg_bubble))
         self.after(100, self.chat_frame._parent_canvas.yview_moveto, 1.0)
-        if return_widget: return msg_bubble
+
+        if return_widget:
+            return msg_bubble
+
+    def _resize_textbox(self, textbox):
+        """Automatically resize textbox based on content."""
+        try:
+            textbox.update_idletasks()
+            # Count lines and adjust height
+            content = textbox.get("1.0", "end-1c")
+            lines = content.count('\n') + 1
+            # Estimate additional lines for word wrapping
+            estimated_lines = max(lines, len(content) // 80 + 1)
+            new_height = min(max(estimated_lines * 20, 30), 300)  # Min 30px, max 300px
+            textbox.configure(height=new_height)
+        except:
+            pass
 
     def update_chat_message_stream(self, widget, chunk):
         """Appends a chunk of text to a message widget."""
-        widget.configure(text=widget.cget("text") + chunk)
+        widget.configure(state="normal")
+        widget.insert("end", chunk)
+        widget.configure(state="disabled")
+        # Resize after adding content
+        self.after(10, lambda: self._resize_textbox(widget))
 
     def update_chat_message_content(self, widget, new_text):
-        """Replaces the entire text of a message widget."""
-        widget.configure(text=new_text)
+        """Replaces the entire text of a message widget with proper error handling."""
+        try:
+            # Check if widget still exists and is valid
+            if not widget or not widget.winfo_exists():
+                print("Warning: Widget no longer exists, skipping update")
+                return
+
+            # Check if the widget is still in the widget hierarchy
+            if not hasattr(widget, 'configure'):
+                print("Warning: Widget is not configurable, skipping update")
+                return
+
+            widget.configure(state="normal")
+            widget.delete("1.0", "end")
+            widget.insert("1.0", new_text)
+            widget.configure(state="disabled")
+
+            # Use a safer approach for delayed resize
+            if widget.winfo_exists():
+                self.after(10, lambda w=widget: self._safe_resize_textbox(w))
+
+        except Exception as e:
+            print(f"Error updating chat message content: {e}")
+            # Don't re-raise the exception to prevent crashes
+
+    def update_chat_message_stream(self, widget, chunk):
+        """Appends a chunk of text to a message widget with proper error handling."""
+        try:
+            # Check if widget still exists and is valid
+            if not widget or not widget.winfo_exists():
+                print("Warning: Widget no longer exists, skipping stream update")
+                return
+
+            widget.configure(state="normal")
+            widget.insert("end", chunk)
+            widget.configure(state="disabled")
+
+            # Use a safer approach for delayed resize
+            if widget.winfo_exists():
+                self.after(10, lambda w=widget: self._safe_resize_textbox(w))
+
+        except Exception as e:
+            print(f"Error updating chat message stream: {e}")
+            # Don't re-raise the exception to prevent crashes
+
+    def _safe_resize_textbox(self, widget):
+        """Safely resize textbox with existence check."""
+        try:
+            if widget and widget.winfo_exists():
+                self._resize_textbox(widget)
+        except Exception as e:
+            print(f"Error during safe resize: {e}")
 
     def load_config(self):
         """Loads configuration from config.json, with defaults."""
