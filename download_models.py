@@ -5,7 +5,8 @@ import os
 model_names = [
     'BAAI/bge-m3',
     'jinaai/jina-embeddings-v2-base-code',
-    'BAAI/bge-reranker-large'
+    'Qwen/Qwen3-Reranker-0.6B',
+    'intfloat/multilingual-e5-large-instruct'
 ]
 
 # Create the target directory if it doesn't exist
@@ -24,7 +25,7 @@ for model_name in model_names:
         continue
 
     # Select the appropriate class depending on the model type
-    if 'reranker' in model_name:
+    if 'reranker' in model_name.lower():
         model = CrossEncoder(model_name)
     else:
         model = SentenceTransformer(model_name)

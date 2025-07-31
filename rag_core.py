@@ -27,34 +27,41 @@ logging.getLogger("chromadb").setLevel(logging.ERROR)
 SUPPORTED_LANGUAGES = {}
 try:
     from tree_sitter_python import language as python_language
+
     SUPPORTED_LANGUAGES['python'] = python_language
 except ImportError:
     print("Warning: tree-sitter-python not installed.")
 try:
     from tree_sitter_javascript import language as js_language
+
     SUPPORTED_LANGUAGES['javascript'] = js_language
 except ImportError:
     print("Warning: tree-sitter-javascript not installed.")
 try:
     from tree_sitter_java import language as java_language
+
     SUPPORTED_LANGUAGES['java'] = java_language
 except ImportError:
     print("Warning: tree-sitter-java not installed.")
 try:
     from tree_sitter_go import language as go_language
+
     SUPPORTED_LANGUAGES['go'] = go_language
 except ImportError:
     print("Warning: tree-sitter-go not installed.")
 try:
     from tree_sitter_cpp import language as cpp_language
+
     SUPPORTED_LANGUAGES['cpp'] = cpp_language
 except ImportError:
     print("Warning: tree-sitter-cpp not installed.")
 try:
     from tree_sitter_typescript import typescript as ts_language
+
     SUPPORTED_LANGUAGES['typescript'] = ts_language
 except ImportError:
     print("Warning: tree-sitter-typescript not installed.")
+
 
 def recursive_character_text_splitter(text: str, chunk_size: int = 768, chunk_overlap: int = 100) -> List[str]:
     """A fallback text splitter based on character count."""
@@ -158,6 +165,12 @@ def extract_text_from_file(file_path: str, log_callback: Callable):
     absolute_file_path = os.path.abspath(file_path)
     _, extension = os.path.splitext(absolute_file_path)
     extension = extension.lower()
+
+    plain_text_extensions = [
+        '.md', '.txt', '.py', '.js', '.java', '.go', '.cpp', '.c', '.h', '.hpp',
+        '.ts', '.sql', '.css', '.html', '.json', '.xml', '.yaml', '.toml', '.php'
+    ]
+
     try:
         if extension == '.pdf':
             with open(absolute_file_path, 'rb') as f:
@@ -181,7 +194,7 @@ def extract_text_from_file(file_path: str, log_callback: Callable):
             except Exception as e:
                 log_callback(f"Skipping .doc file due to pydocx processing error: {file_path}. Error: {e}")
                 return ""
-        elif extension in ['.md', '.txt']:
+        elif extension in plain_text_extensions:
             with open(absolute_file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 return f.read()
     except Exception as e:
@@ -249,13 +262,11 @@ def run_indexing_logic(
                 progress_callback(min(i + file_batch_size, total_files) / total_files)
                 continue
 
-            # --- NEW: Deduplication logic ---
+            # --- Deduplication logic ---
             unique_chunks_map = {}
             for chunk in batch_chunks_raw:
-                # Use a stable hash (SHA256) for the ID
                 text_to_hash = chunk['source'] + chunk['text']
                 id_hash = hashlib.sha256(text_to_hash.encode()).hexdigest()
-                # If we haven't seen this hash before, add it to our map of unique chunks
                 if id_hash not in unique_chunks_map:
                     unique_chunks_map[id_hash] = chunk
 
@@ -265,20 +276,29 @@ def run_indexing_logic(
 
             unique_chunks_list = list(unique_chunks_map.values())
             ids = [f"{collection_name}-{id_hash}" for id_hash in unique_chunks_map.keys()]
-            documents = [chunk['text'] for chunk in unique_chunks_list]
+            documents_raw = [chunk['text'] for chunk in unique_chunks_list]
+
+            # --- Add prefix for "instruct" models ---
+            document_prefix = "passage: " if "e5-large-instruct" in model_name else ""
+            documents_to_embed = [f"{document_prefix}{doc}" for doc in documents_raw]
+
             metadatas = [{"source": chunk['source']} for chunk in unique_chunks_list]
 
-            log_callback(f"Encoding {len(documents)} unique chunks for {batch_label}...")
+            log_callback(f"Encoding {len(documents_to_embed)} unique chunks for {batch_label}...")
             model = SentenceTransformer(model_name, device=device)
+
+            if model.tokenizer.pad_token is None:
+                model.tokenizer.pad_token = model.tokenizer.eos_token
+
             vectors = model.encode(
-                documents,
+                documents_to_embed,
                 show_progress_bar=True,
                 batch_size=8
             )
 
             collection.add(
                 embeddings=vectors.tolist(),
-                documents=documents,
+                documents=documents_raw,  # Save original documents without prefix
                 metadatas=metadatas,
                 ids=ids
             )
@@ -312,6 +332,9 @@ def run_indexing_logic(
             return semantic_splitter.split_text(content)
 
         process_files_in_batches(files_to_process, "docs", model_name, semantic_chunking_wrapper)
+
+        del embeddings_model, semantic_splitter
+        if device == 'cuda': torch.cuda.empty_cache()
 
     if not stop_event.is_set():
         log_callback("\n--- All Done! ---")

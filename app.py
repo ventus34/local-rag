@@ -18,7 +18,7 @@ class RAGApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Local RAG Engine")
-        self.geometry("800x700")
+        self.geometry("1100x700")
         ctk.set_appearance_mode("dark")
 
         # --- Instance Variables ---
@@ -38,14 +38,12 @@ class RAGApp(ctk.CTk):
                 "intfloat/e5-large-v2": "large, accurate (EN)"
             },
             "docs": {
-                "BAAI/bge-m3": "default, multilingual, large",
+                "intfloat/multilingual-e5-large-instruct": "default, multilingual, instruct",
+                "BAAI/bge-m3": "legacy, multilingual, large",
                 "sentence-transformers/all-MiniLM-L6-v2": "small, very fast (EN)",
-                "sentence-transformers/paraphrase-multilingual-mpnet-base-v2": "medium, multilingual"
             },
             "reranker": {
-                "BAAI/bge-reranker-large": "default, large, most accurate",
-                "BAAI/bge-reranker-base": "medium, faster",
-                "BAAI/bge-reranker-small": "small, very fast"
+                "Qwen/Qwen3-Reranker-0.6B": "default, fast, multilingual (0.6B)",
             }
         }
         self.update_backend_urls_from_config()
@@ -136,6 +134,8 @@ class RAGApp(ctk.CTk):
             side="left")
         self.hyde_var = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(options_frame, text="Use HyDE", variable=self.hyde_var).pack(side="left", padx=10)
+        self.reranker_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(options_frame, text="Use Reranker", variable=self.reranker_var).pack(side="left", padx=10)
 
         self.chat_frame = ctk.CTkScrollableFrame(self.querying_tab)
         self.chat_frame.pack(expand=True, fill="both", padx=10, pady=10)
@@ -283,6 +283,7 @@ class RAGApp(ctk.CTk):
         params = {
             "llm_url": self.backend_urls.get(self.backend_var.get()),
             "use_hyde": self.hyde_var.get(),
+            "use_reranker": self.reranker_var.get(),
             "lang_choice": self.lang_var.get(),
             "model_name": self.model_name_entry.get()
         }
@@ -293,32 +294,35 @@ class RAGApp(ctk.CTk):
 
     def run_query(self, **kwargs):
         """
-        Manages the entire query lifecycle, including loading and unloading models.
+        Manages the entire query lifecycle with JIT model loading.
         """
         full_response = ""
         assistant_message_widget = None
         try:
-            # 1. Load all necessary models once at the beginning
-            self.engine.load_query_models()
-
             question = self.conversation_history[-1]['content']
-            context = self.engine.retrieve_and_rerank_context(question, kwargs['use_hyde'], kwargs['llm_url'],
-                                                              kwargs['model_name'])
+            context = self.engine.retrieve_and_rerank_context(
+                question,
+                kwargs['use_hyde'],
+                kwargs['use_reranker'],
+                kwargs['llm_url'],
+                kwargs['model_name']
+            )
 
-            response_generator = self.engine.stream_answer_with_context(self.conversation_history, context,
-                                                                        kwargs['llm_url'], kwargs['lang_choice'],
-                                                                        kwargs['model_name'])
+            response_generator = self.engine.stream_answer_with_context(
+                self.conversation_history,
+                context,
+                kwargs['llm_url'],
+                kwargs['lang_choice'],
+                kwargs['model_name']
+            )
             assistant_message_widget = self.add_chat_message("assistant", "", return_widget=True)
 
-            # 2. Stream the raw response to the UI
             for chunk in response_generator:
                 full_response += chunk
                 self.after(5, self.update_chat_message_stream, assistant_message_widget, chunk)
 
             self.conversation_history.append({"role": "assistant", "content": full_response})
 
-            # 3. After streaming, run citation IN THE SAME THREAD.
-            #    This avoids the race condition as models are still loaded.
             if context:
                 top_sources = list(dict.fromkeys([chunk['source'] for chunk in context[:5]]))
                 self.run_citation(full_response, context, top_sources, assistant_message_widget)
@@ -326,8 +330,8 @@ class RAGApp(ctk.CTk):
         except Exception as e:
             self.after(0, lambda err=e: self.add_chat_message("assistant", f"An error occurred: {err}"))
         finally:
-            # 4. Unload all models at the very end, after all work is done.
-            self.engine.unload_query_models()
+            if self.engine:
+                self.engine.unload_query_models()
             self.after(0, lambda: self.send_button.configure(state="normal"))
 
     def run_citation(self, text, context, top_sources, widget):
@@ -344,8 +348,7 @@ class RAGApp(ctk.CTk):
         """Adds a message or status widget to the chat frame."""
         if self.chat_widgets and self.chat_widgets[-1].winfo_children():
             last_widget_label = self.chat_widgets[-1].winfo_children()[0]
-            if isinstance(last_widget_label, ctk.CTkLabel) and last_widget_label.cget("text") in ("Processing...",
-                                                                                                  "Loading..."):
+            if isinstance(last_widget_label, ctk.CTkLabel) and last_widget_label.cget("text").startswith("Processing..."):
                 self.chat_widgets.pop().destroy()
 
         justify, anchor, fg_color = ("left", "w", "#3A3A3A") if role == "assistant" else ("right", "e", "#2C4B8F")
@@ -373,8 +376,9 @@ class RAGApp(ctk.CTk):
     def load_config(self):
         """Loads configuration from config.json, with defaults."""
         defaults = {
-            "models": {"code_model_path": 'jinaai/jina-embeddings-v2-base-code', "docs_model_path": 'BAAI/bge-m3',
-                       "reranker_model_path": 'BAAI/bge-reranker-large'},
+            "models": {"code_model_path": 'jinaai/jina-embeddings-v2-base-code',
+                       "docs_model_path": 'intfloat/multilingual-e5-large-instruct',
+                       "reranker_model_path": 'Qwen/Qwen3-Reranker-0.6B'},
             "endpoints": {"lm_studio_url": "http://localhost:1234/v1/chat/completions",
                           "ollama_url": "http://localhost:11434/v1/chat/completions"},
             "hardware": {"device": "Auto", "fp16": True},
