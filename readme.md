@@ -106,3 +106,11 @@ Click the **"Settings"** button to customize:
   * **Advanced Indexing & Retrieval**: Fine-tune parameters like chunk sizes, retrieval candidates (k), and batch sizes for indexing.
 
 Settings are saved to `config.json` and reloaded when the engine is started or reloaded.
+
+## Screenshots 📷
+
+![Indexing](./readme/1.png)
+
+![Querying](./readme/2.png)
+
+![Settings](./readme/3.png)
