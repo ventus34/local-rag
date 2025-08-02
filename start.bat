@@ -1,3 +1,4 @@
+
 @echo off
 setlocal
 title Local RAG Engine Launcher
@@ -92,7 +93,7 @@ if %errorlevel% neq 0 (
 REM --- Step 5: Download Models ---
 ECHO.
 ECHO [3/4] Checking for local models...
-if not exist ".\models\BAAI_bge-m3" (
+if not exist ".\models\nomic-ai_CodeRankEmbed" (
     ECHO Models not found. Running download script (this may take a while)...
     python download_models.py
     if %errorlevel% neq 0 (

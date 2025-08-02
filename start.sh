@@ -33,7 +33,7 @@ pip install -r requirements.txt
 echo ""
 echo "[3/4] Checking for local models..."
 # Check for one of the key model folders to see if download is needed
-if [ ! -d "./models/BAAI_bge-m3" ]; then
+if [ ! -d "./models/jinaai_jina-embeddings-v2-base-code" ]; then
     echo "Models not found. Running download script (this may take a while)..."
     python3 download_models.py
 else
