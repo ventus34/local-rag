@@ -1,5 +1,5 @@
 import customtkinter as ctk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 import threading
 import os
 import json
@@ -33,19 +33,22 @@ class RAGApp(ctk.CTk):
         # --- Predefined Model Choices for Settings UI ---
         self.model_choices = {
             "code": {
-                "jinaai/jina-embeddings-v2-base-code": "default, balanced",
-                "BAAI/bge-small-en-v1.5": "small, fast (EN)",
-                "intfloat/e5-large-v2": "large, accurate (EN)"
+                'jinaai/jina-embeddings-v2-base-code': 'Jina Code v2 (560MB, specialized)',
+                'sentence-transformers/all-MiniLM-L6-v2': 'MiniLM-L6 (90MB, ultra-light)'
             },
             "docs": {
-                "intfloat/multilingual-e5-large-instruct": "default, multilingual, instruct",
-                "BAAI/bge-m3": "legacy, multilingual, large",
-                "sentence-transformers/all-MiniLM-L6-v2": "small, very fast (EN)",
+                'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2': 'MiniLM-L12 Multilingual (471MB, balanced)',
+                'sentence-transformers/paraphrase-multilingual-mpnet-base-v2': 'MPNet Multilingual (1.1GB)',
+                'intfloat/multilingual-e5-large-instruct': 'E5 Large Instruct (1.1GB)',
+                'BAAI/bge-m3': 'BGE-M3 (2.27GB)',
+                'sentence-transformers/all-MiniLM-L6-v2': 'MiniLM-L6 (90MB, ultra-light)'
+
             },
             "reranker": {
-                "Qwen/Qwen3-Reranker-0.6B": "default, fast, multilingual (0.6B)",
+                "cross-encoder/ms-marco-MiniLM-L6-v2": "default, MS MARCO trained, lightweight (~90MB)"
             }
         }
+
         self.update_backend_urls_from_config()
 
         # --- ChromaDB Client ---
@@ -349,22 +352,20 @@ class RAGApp(ctk.CTk):
         if self.chat_widgets and self.chat_widgets[-1].winfo_children():
             last_widget_label = self.chat_widgets[-1].winfo_children()[0]
             if isinstance(last_widget_label, (ctk.CTkLabel, ctk.CTkTextbox)) and (
-            "Processing..." in last_widget_label.cget("text") if isinstance(last_widget_label,
-                                                                            ctk.CTkLabel) else "Processing..." in last_widget_label.get(
-                    "1.0", "end")):
+                    "Processing..." in last_widget_label.cget("text") if isinstance(last_widget_label,
+                                                                                    ctk.CTkLabel) else "Processing..." in last_widget_label.get(
+                        "1.0", "end")):
                 self.chat_widgets.pop().destroy()
 
         justify, anchor, fg_color = ("left", "w", "#3A3A3A") if role == "assistant" else ("right", "e", "#2C4B8F")
 
         frame = ctk.CTkFrame(self.chat_frame, fg_color="transparent")
 
-        # Use CTkTextbox instead of CTkLabel for better text handling
         msg_bubble = ctk.CTkTextbox(frame, height=1, wrap="word", fg_color=fg_color,
                                     corner_radius=10, font=("", 12))
 
-        # Configure the textbox
         msg_bubble.insert("1.0", message)
-        msg_bubble.configure(state="disabled")  # Make it read-only
+        msg_bubble.configure(state="disabled")
 
         if is_status:
             msg_bubble.configure(fg_color="#4A4A4A", text_color="#B0B0B0")
@@ -373,100 +374,106 @@ class RAGApp(ctk.CTk):
         frame.pack(fill="x", expand=True)
         self.chat_widgets.append(frame)
 
-        # Auto-resize the textbox based on content
-        self.after(10, lambda: self._resize_textbox(msg_bubble))
+        self.after(10, lambda: self._safe_resize_textbox(msg_bubble))
         self.after(100, self.chat_frame._parent_canvas.yview_moveto, 1.0)
 
         if return_widget:
             return msg_bubble
 
-    def _resize_textbox(self, textbox):
-        """Automatically resize textbox based on content."""
-        try:
-            textbox.update_idletasks()
-            # Count lines and adjust height
-            content = textbox.get("1.0", "end-1c")
-            lines = content.count('\n') + 1
-            # Estimate additional lines for word wrapping
-            estimated_lines = max(lines, len(content) // 80 + 1)
-            new_height = min(max(estimated_lines * 20, 30), 300)  # Min 30px, max 300px
-            textbox.configure(height=new_height)
-        except:
-            pass
-
-    def update_chat_message_stream(self, widget, chunk):
-        """Appends a chunk of text to a message widget."""
-        widget.configure(state="normal")
-        widget.insert("end", chunk)
-        widget.configure(state="disabled")
-        # Resize after adding content
-        self.after(10, lambda: self._resize_textbox(widget))
-
     def update_chat_message_content(self, widget, new_text):
         """Replaces the entire text of a message widget with proper error handling."""
         try:
-            # Check if widget still exists and is valid
             if not widget or not widget.winfo_exists():
-                print("Warning: Widget no longer exists, skipping update")
                 return
-
-            # Check if the widget is still in the widget hierarchy
-            if not hasattr(widget, 'configure'):
-                print("Warning: Widget is not configurable, skipping update")
-                return
-
             widget.configure(state="normal")
             widget.delete("1.0", "end")
             widget.insert("1.0", new_text)
             widget.configure(state="disabled")
-
-            # Use a safer approach for delayed resize
             if widget.winfo_exists():
                 self.after(10, lambda w=widget: self._safe_resize_textbox(w))
-
         except Exception as e:
             print(f"Error updating chat message content: {e}")
-            # Don't re-raise the exception to prevent crashes
 
     def update_chat_message_stream(self, widget, chunk):
         """Appends a chunk of text to a message widget with proper error handling."""
         try:
-            # Check if widget still exists and is valid
             if not widget or not widget.winfo_exists():
-                print("Warning: Widget no longer exists, skipping stream update")
                 return
-
             widget.configure(state="normal")
             widget.insert("end", chunk)
             widget.configure(state="disabled")
-
-            # Use a safer approach for delayed resize
             if widget.winfo_exists():
                 self.after(10, lambda w=widget: self._safe_resize_textbox(w))
-
         except Exception as e:
             print(f"Error updating chat message stream: {e}")
-            # Don't re-raise the exception to prevent crashes
 
     def _safe_resize_textbox(self, widget):
         """Safely resize textbox with existence check."""
         try:
             if widget and widget.winfo_exists():
                 self._resize_textbox(widget)
-        except Exception as e:
-            print(f"Error during safe resize: {e}")
+        except Exception:
+            pass
+
+    def _resize_textbox(self, textbox):
+        """Automatically resize textbox based on content and actual width."""
+        try:
+            textbox.update_idletasks()
+            widget_width = textbox.winfo_width()
+
+            if widget_width <= 1:
+                return
+
+            chars_per_line = max(1, widget_width // 8)
+
+            content = textbox.get("1.0", "end-1c")
+
+            lines = content.count('\n') + 1
+
+            wrapped_lines = sum((len(line) // chars_per_line) for line in content.split('\n'))
+
+            estimated_total_lines = lines + wrapped_lines
+
+            font_tuple = textbox.cget("font")
+            font_size = font_tuple[1] if isinstance(font_tuple, tuple) and len(font_tuple) > 1 else 12
+
+            new_height = estimated_total_lines * (font_size + 4) + 15
+
+            final_height = min(max(new_height, 30), 450)
+
+            if abs(textbox.cget("height") - final_height) > 10:
+                textbox.configure(height=final_height)
+        except Exception:
+            pass
 
     def load_config(self):
         """Loads configuration from config.json, with defaults."""
         defaults = {
-            "models": {"code_model_path": 'jinaai/jina-embeddings-v2-base-code',
-                       "docs_model_path": 'intfloat/multilingual-e5-large-instruct',
-                       "reranker_model_path": 'Qwen/Qwen3-Reranker-0.6B'},
-            "endpoints": {"lm_studio_url": "http://localhost:1234/v1/chat/completions",
-                          "ollama_url": "http://localhost:11434/v1/chat/completions"},
-            "hardware": {"device": "Auto", "fp16": True},
-            "default_model": "local-model", "project_paths": {}
+            "models": {
+                "code_model_path": 'jinaai/jina-embeddings-v2-base-code',
+                "docs_model_path": 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2',
+                "reranker_model_path": 'cross-encoder/ms-marco-MiniLM-L6-v2'
+            },
+            "endpoints": {
+                "lm_studio_url": "http://localhost:1234/v1/chat/completions",
+                "ollama_url": "http://localhost:11434/v1/chat/completions"
+            },
+            "hardware": {
+                "device": "GPU (CUDA)",
+                "fp16": True
+            },
+            "retrieval": {
+                "chunk_size": 768,
+                "chunk_overlap": 100,
+                "retrieval_candidates_k": 20,
+                "reranker_top_k": 7,
+                "indexing_batch_size": 8,
+                "indexing_file_batch_size": 50
+            },
+            "default_model": "local-model",
+            "project_paths": {}
         }
+
         if os.path.exists(self.config_file):
             with open(self.config_file, 'r') as f:
                 try:
@@ -475,7 +482,7 @@ class RAGApp(ctk.CTk):
                         if key not in user_config:
                             user_config[key] = value
                         elif isinstance(value, dict):
-                            user_config[key] = {**value, **user_config[key]}
+                            user_config[key] = {**value, **user_config.get(key, {})}
                     return user_config
                 except json.JSONDecodeError:
                     print(f"Warning: {self.config_file} is corrupted.")
@@ -492,34 +499,35 @@ class RAGApp(ctk.CTk):
         }
 
     def open_settings_window(self):
-        settings_win = ctk.CTkToplevel(self);
-        settings_win.title("Settings");
-        settings_win.geometry("700x450");
+        settings_win = ctk.CTkToplevel(self)
+        settings_win.title("Settings")
+        settings_win.geometry("700x680")
         settings_win.transient(self)
+        settings_win.grab_set()
 
         def create_model_row(key, text):
-            frame = ctk.CTkFrame(settings_win);
+            frame = ctk.CTkFrame(settings_win)
             frame.pack(fill="x", padx=10, pady=5)
             ctk.CTkLabel(frame, text=text, width=150, anchor="w").pack(side="left")
             choices = [f"{name} ({hint})" for name, hint in self.model_choices[key].items()]
             current_model = self.model_config.get(f"{key}_model_path", list(self.model_choices[key].keys())[0])
             current_hint = self.model_choices[key].get(current_model, "")
             var = ctk.StringVar(value=f"{current_model} ({current_hint})")
-            menu = ctk.CTkOptionMenu(frame, variable=var, values=choices, width=450);
+            menu = ctk.CTkOptionMenu(frame, variable=var, values=choices, width=450)
             menu.pack(side="left", padx=5)
             return var
 
-        models_frame = ctk.CTkFrame(settings_win);
+        models_frame = ctk.CTkFrame(settings_win)
         models_frame.pack(fill="x", padx=10, pady=10)
         ctk.CTkLabel(models_frame, text="Model Selection", font=("", 14, "bold")).pack(anchor="w", pady=5)
         code_model_var = create_model_row("code", "Code Model:")
         docs_model_var = create_model_row("docs", "Documents Model:")
         reranker_model_var = create_model_row("reranker", "Reranker Model:")
 
-        hw_frame = ctk.CTkFrame(settings_win);
+        hw_frame = ctk.CTkFrame(settings_win)
         hw_frame.pack(fill="x", padx=10, pady=10)
         ctk.CTkLabel(hw_frame, text="Hardware Settings", font=("", 14, "bold")).pack(anchor="w", pady=5)
-        device_frame = ctk.CTkFrame(hw_frame);
+        device_frame = ctk.CTkFrame(hw_frame)
         device_frame.pack(fill="x", pady=2)
         ctk.CTkLabel(device_frame, text="Compute Device:", width=150, anchor="w").pack(side="left", padx=5)
         device_var = ctk.StringVar(value=self.user_config.get("hardware", {}).get("device", "Auto"))
@@ -527,13 +535,57 @@ class RAGApp(ctk.CTk):
         fp16_var = ctk.BooleanVar(value=self.user_config.get("hardware", {}).get("fp16", False))
         ctk.CTkSwitch(hw_frame, text="Use Half-Precision (FP16)", variable=fp16_var).pack(anchor="w", pady=5, padx=5)
 
+        adv_frame = ctk.CTkFrame(settings_win)
+        adv_frame.pack(fill="x", padx=10, pady=10)
+        ctk.CTkLabel(adv_frame, text="Advanced Indexing & Retrieval Settings", font=("", 14, "bold")).pack(anchor="w",
+                                                                                                           pady=5)
+
+        retrieval_config = self.user_config.get("retrieval", {})
+
+        def create_adv_row(parent, text, value):
+            frame = ctk.CTkFrame(parent, fg_color="transparent")
+            frame.pack(fill="x", pady=2, padx=5)
+            ctk.CTkLabel(frame, text=text, width=200, anchor="w").pack(side="left")
+            entry = ctk.CTkEntry(frame, width=100)
+            entry.insert(0, str(value))
+            entry.pack(side="left")
+            return entry
+
+        chunk_size_entry = create_adv_row(adv_frame, "Chunk Size (Tokens):", retrieval_config.get("chunk_size", 768))
+        chunk_overlap_entry = create_adv_row(adv_frame, "Chunk Overlap (Tokens):",
+                                             retrieval_config.get("chunk_overlap", 100))
+        k_entry = create_adv_row(adv_frame, "Retrieval Candidates (k):",
+                                 retrieval_config.get("retrieval_candidates_k", 20))
+        top_k_entry = create_adv_row(adv_frame, "Reranker Top-K:", retrieval_config.get("reranker_top_k", 7))
+        batch_size_entry = create_adv_row(adv_frame, "Indexing Embedding Batch Size:",
+                                          retrieval_config.get("indexing_batch_size", 8))
+        file_batch_size_entry = create_adv_row(adv_frame, "Indexing File Batch Size:",
+                                               retrieval_config.get("indexing_file_batch_size", 50))
+
         def on_save():
-            def get_model_name(s): return s.split(" (")[0]
+            def get_model_name(s):
+                return s.split(" (")[0]
 
             self.user_config["models"]["code_model_path"] = get_model_name(code_model_var.get())
             self.user_config["models"]["docs_model_path"] = get_model_name(docs_model_var.get())
             self.user_config["models"]["reranker_model_path"] = get_model_name(reranker_model_var.get())
+
             self.user_config["hardware"] = {"device": device_var.get(), "fp16": fp16_var.get()}
+
+            try:
+                self.user_config["retrieval"] = {
+                    "chunk_size": int(chunk_size_entry.get()),
+                    "chunk_overlap": int(chunk_overlap_entry.get()),
+                    "retrieval_candidates_k": int(k_entry.get()),
+                    "reranker_top_k": int(top_k_entry.get()),
+                    "indexing_batch_size": int(batch_size_entry.get()),
+                    "indexing_file_batch_size": int(file_batch_size_entry.get())
+                }
+            except ValueError:
+                messagebox.showerror("Invalid Input", "All advanced settings must be valid integers.",
+                                     parent=settings_win)
+                return
+
             self.save_config()
             self.model_config = self.user_config.get("models", {})
             self.update_backend_urls_from_config()

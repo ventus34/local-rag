@@ -24,13 +24,11 @@ logging.getLogger("transformers.modeling_utils").setLevel(logging.ERROR)
 logging.getLogger("chromadb").setLevel(logging.ERROR)
 
 # --- Dynamically load tree-sitter languages ---
-
-# --- Dynamically load tree-sitter languages ---
 SUPPORTED_LANGUAGES = {}
 try:
     from tree_sitter_python import language as python_language
+
     lang_obj = python_language() if callable(python_language) else python_language
-    # Ensure we have a proper Language object
     if not isinstance(lang_obj, Language):
         if hasattr(lang_obj, '__class__') and 'PyCapsule' in str(type(lang_obj)):
             SUPPORTED_LANGUAGES['python'] = Language(lang_obj)
@@ -43,6 +41,7 @@ except (ImportError, Exception) as e:
 
 try:
     from tree_sitter_javascript import language as js_language
+
     lang_obj = js_language() if callable(js_language) else js_language
     if not isinstance(lang_obj, Language):
         if hasattr(lang_obj, '__class__') and 'PyCapsule' in str(type(lang_obj)):
@@ -56,6 +55,7 @@ except (ImportError, Exception) as e:
 
 try:
     from tree_sitter_java import language as java_language
+
     lang_obj = java_language() if callable(java_language) else java_language
     if not isinstance(lang_obj, Language):
         if hasattr(lang_obj, '__class__') and 'PyCapsule' in str(type(lang_obj)):
@@ -69,6 +69,7 @@ except (ImportError, Exception) as e:
 
 try:
     from tree_sitter_go import language as go_language
+
     lang_obj = go_language() if callable(go_language) else go_language
     if not isinstance(lang_obj, Language):
         if hasattr(lang_obj, '__class__') and 'PyCapsule' in str(type(lang_obj)):
@@ -82,6 +83,7 @@ except (ImportError, Exception) as e:
 
 try:
     from tree_sitter_cpp import language as cpp_language
+
     lang_obj = cpp_language() if callable(cpp_language) else cpp_language
     if not isinstance(lang_obj, Language):
         if hasattr(lang_obj, '__class__') and 'PyCapsule' in str(type(lang_obj)):
@@ -95,6 +97,7 @@ except (ImportError, Exception) as e:
 
 try:
     from tree_sitter_typescript import typescript as ts_language
+
     lang_obj = ts_language() if callable(ts_language) else ts_language
     if not isinstance(lang_obj, Language):
         if hasattr(lang_obj, '__class__') and 'PyCapsule' in str(type(lang_obj)):
@@ -107,8 +110,20 @@ except (ImportError, Exception) as e:
     print(f"Warning: tree-sitter-typescript not available. {e}")
 
 
+def resolve_model_path(model_name: str, models_dir: str = "./models") -> str:
+    """
+    Resolves a model name to a local path if it exists, otherwise returns the original name.
+    """
+    safe_name = model_name.replace('/', '_')
+    local_path = os.path.join(models_dir, safe_name)
+    if os.path.isdir(local_path):
+        print(f"Found local model '{model_name}' at: {local_path}")
+        return local_path
+    print(f"Local model for '{model_name}' not found. Will use remote from Hugging Face Hub.")
+    return model_name
 
-def recursive_character_text_splitter(text: str, chunk_size: int = 768, chunk_overlap: int = 100) -> List[str]:
+
+def recursive_character_text_splitter(text: str, chunk_size: int, chunk_overlap: int) -> List[str]:
     """A fallback text splitter based on character count."""
     if not text: return []
     chunks = []
@@ -120,8 +135,8 @@ def recursive_character_text_splitter(text: str, chunk_size: int = 768, chunk_ov
     return chunks
 
 
-def chunk_code_with_tree_sitter(file_path: str, content: str, log_callback: Callable, chunk_size: int = 768,
-                                chunk_overlap: int = 100) -> List[str]:
+def chunk_code_with_tree_sitter(file_path: str, content: str, log_callback: Callable, chunk_size: int,
+                                chunk_overlap: int) -> List[str]:
     """
     Chunks code using tree-sitter to respect logical boundaries (functions, classes),
     then applies a recursive splitter within those boundaries if they are too large.
@@ -145,57 +160,19 @@ def chunk_code_with_tree_sitter(file_path: str, content: str, log_callback: Call
         try:
             language = SUPPORTED_LANGUAGES[lang_name]
 
-            # Validate that we have a proper Language object
             if not isinstance(language, Language):
                 log_callback(f"Invalid language object for {lang_name}, falling back to recursive split.")
                 return recursive_character_text_splitter(content, chunk_size, chunk_overlap)
 
             parser = Parser()
-
-            # Try both set_language and direct assignment for compatibility
             try:
                 parser.set_language(language)
             except (AttributeError, TypeError):
-                try:
-                    parser.language = language
-                except Exception:
-                    log_callback(f"Could not set language for parser with {file_path}, using recursive split.")
-                    return recursive_character_text_splitter(content, chunk_size, chunk_overlap)
+                parser.language = language
 
             tree = parser.parse(bytes(content, "utf8"))
             query = language.query(queries[lang_name])
-
-            # Handle different tree-sitter API versions
-            captures = []
-            try:
-                # Try the current API - query.captures()
-                captures_result = query.captures(tree.root_node)
-                # Handle both tuple and object formats
-                for item in captures_result:
-                    if isinstance(item, tuple):
-                        captures.append(item)
-                    elif hasattr(item, 'node') and hasattr(item, 'name'):
-                        captures.append((item.node, item.name))
-                    else:
-                        # Try to extract from match objects
-                        if hasattr(item, 'captures'):
-                            for capture in item.captures:
-                                captures.append((capture.node, capture.name))
-            except AttributeError:
-                try:
-                    # Try the matches API
-                    matches = query.matches(tree.root_node)
-                    for match in matches:
-                        if hasattr(match, 'captures'):
-                            for capture in match.captures:
-                                captures.append((capture.node, capture.name))
-                        elif isinstance(match, dict) and 'captures' in match:
-                            for capture in match['captures']:
-                                captures.append((capture['node'], capture['name']))
-                except (AttributeError, TypeError):
-                    # If all APIs fail, fall back to recursive splitting
-                    log_callback(f"Tree-sitter API incompatible for {file_path}, using recursive split.")
-                    return recursive_character_text_splitter(content, chunk_size, chunk_overlap)
+            captures = query.captures(tree.root_node)
 
             if not captures:
                 log_callback(f"Tree-sitter found no major constructs in {file_path}, using recursive split.")
@@ -238,15 +215,12 @@ def get_files_from_repo(repo_path: str, extensions: List[str], excluded_dirs: se
     """
     allowed_extensions = {f".{ext.lstrip('.')}" for ext in extensions}
     found_files = []
-
     ignore_pattern = re.compile(r'(\.min\.(js|css)|-[a-f0-9]{8,}\.(js|css))$')
 
     for root, dirs, files in os.walk(repo_path):
         dirs[:] = [d for d in dirs if d not in excluded_dirs]
         for file in files:
-            if ignore_pattern.search(file):
-                continue
-
+            if ignore_pattern.search(file): continue
             if any(file.endswith(ext) for ext in allowed_extensions):
                 found_files.append(os.path.join(root, file))
     return found_files
@@ -309,6 +283,13 @@ def run_indexing_logic(
     log_callback("Starting indexing process...")
     model_config = user_config.get("models", {})
     hw_config = user_config.get("hardware", {})
+
+    retrieval_config = user_config.get("retrieval", {})
+    chunk_size = retrieval_config.get("chunk_size", 768)
+    chunk_overlap = retrieval_config.get("chunk_overlap", 100)
+    indexing_batch_size = retrieval_config.get("indexing_batch_size", 8)
+    file_batch_size = retrieval_config.get("indexing_file_batch_size", 50)
+
     user_device_choice = hw_config.get("device", "Auto")
 
     if user_device_choice == "CPU":
@@ -328,7 +309,6 @@ def run_indexing_logic(
 
     def process_files_in_batches(files: List[str], resource_type: str, model_name: str, chunking_function: Callable):
         """Helper function to process a list of files in memory-safe batches."""
-        file_batch_size = 50
         total_files = len(files)
 
         collection_name = f"{project_name}-{resource_type}"
@@ -354,7 +334,6 @@ def run_indexing_logic(
                 progress_callback(min(i + file_batch_size, total_files) / total_files)
                 continue
 
-            # --- Deduplication logic ---
             unique_chunks_map = {}
             for chunk in batch_chunks_raw:
                 text_to_hash = chunk['source'] + chunk['text']
@@ -370,14 +349,13 @@ def run_indexing_logic(
             ids = [f"{collection_name}-{id_hash}" for id_hash in unique_chunks_map.keys()]
             documents_raw = [chunk['text'] for chunk in unique_chunks_list]
 
-            # --- Add prefix for "instruct" models ---
             document_prefix = "passage: " if "e5-large-instruct" in model_name else ""
             documents_to_embed = [f"{document_prefix}{doc}" for doc in documents_raw]
-
             metadatas = [{"source": chunk['source']} for chunk in unique_chunks_list]
 
             log_callback(f"Encoding {len(documents_to_embed)} unique chunks for {batch_label}...")
-            model = SentenceTransformer(model_name, device=device)
+            resolved_model_path = resolve_model_path(model_name)
+            model = SentenceTransformer(resolved_model_path, device=device)
 
             if model.tokenizer.pad_token is None:
                 model.tokenizer.pad_token = model.tokenizer.eos_token
@@ -385,12 +363,12 @@ def run_indexing_logic(
             vectors = model.encode(
                 documents_to_embed,
                 show_progress_bar=True,
-                batch_size=8
+                batch_size=indexing_batch_size
             )
 
             collection.add(
                 embeddings=vectors.tolist(),
-                documents=documents_raw,  # Save original documents without prefix
+                documents=documents_raw,
                 metadatas=metadatas,
                 ids=ids
             )
@@ -406,7 +384,10 @@ def run_indexing_logic(
         extensions = [".go", ".js", ".py", ".ts", ".java", ".c", ".cpp", ".h", ".hpp", ".php", ".sql"]
         files_to_process = get_files_from_repo(repo_path, extensions, excluded_dirs)
         log_callback(f"Found {len(files_to_process)} code files to process.")
-        process_files_in_batches(files_to_process, "code", model_name, chunk_code_with_tree_sitter)
+
+        code_chunker = lambda fp, c, lc: chunk_code_with_tree_sitter(fp, c, lc, chunk_size=chunk_size,
+                                                                     chunk_overlap=chunk_overlap)
+        process_files_in_batches(files_to_process, "code", model_name, code_chunker)
 
     if stop_event.is_set(): return
 
@@ -417,7 +398,8 @@ def run_indexing_logic(
         files_to_process = get_files_from_repo(repo_path, extensions, excluded_dirs)
         log_callback(f"Found {len(files_to_process)} document files to process.")
 
-        embeddings_model = HuggingFaceEmbeddings(model_name=model_name, model_kwargs={'device': device})
+        resolved_model_path = resolve_model_path(model_name)
+        embeddings_model = HuggingFaceEmbeddings(model_name=resolved_model_path, model_kwargs={'device': device})
         semantic_splitter = SemanticChunker(embeddings_model)
 
         def semantic_chunking_wrapper(file_path, content, log_callback):

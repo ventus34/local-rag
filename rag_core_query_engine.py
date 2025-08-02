@@ -16,6 +16,19 @@ logging.getLogger("transformers.modeling_utils").setLevel(logging.ERROR)
 logging.getLogger("chromadb").setLevel(logging.ERROR)
 
 
+def resolve_model_path(model_name: str, models_dir: str = "./models") -> str:
+    """
+    Resolves a model name to a local path if it exists, otherwise returns the original name.
+    """
+    safe_name = model_name.replace('/', '_')
+    local_path = os.path.join(models_dir, safe_name)
+    if os.path.isdir(local_path):
+        print(f"Found local model '{model_name}' at: {local_path}")
+        return local_path
+    print(f"Local model for '{model_name}' not found. Will use remote from Hugging Face Hub.")
+    return model_name
+
+
 class HybridRAGQueryEngine:
     def __init__(self, repo_path: str, user_config: dict, chroma_client: chromadb.Client):
         """
@@ -24,9 +37,16 @@ class HybridRAGQueryEngine:
         print(f"Initializing RAG Engine for project: {repo_path}...")
 
         self.repo_path = repo_path
-        self.model_config = user_config.get("models", {})
-        hw_config = user_config.get("hardware", {})
-        self.backend_urls = user_config.get("endpoints", {})
+        self.user_config = user_config
+        self.model_config = self.user_config.get("models", {})
+        hw_config = self.user_config.get("hardware", {})
+        self.backend_urls = self.user_config.get("endpoints", {})
+
+        # --- MODIFIED: Load retrieval settings from config ---
+        self.retrieval_config = self.user_config.get("retrieval", {})
+        self.retrieval_k = self.retrieval_config.get("retrieval_candidates_k", 20)
+        self.reranker_top_k = self.retrieval_config.get("reranker_top_k", 7)
+
         project_name = os.path.basename(repo_path)
 
         self.fp16 = hw_config.get("fp16", False)
@@ -40,9 +60,12 @@ class HybridRAGQueryEngine:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"Using device: {self.device}. FP16: {self.fp16}")
 
-        self.docs_model_name = self.model_config.get("docs_model_path", 'intfloat/multilingual-e5-large-instruct')
-        self.code_model_name = self.model_config.get("code_model_path", 'jinaai/jina-embeddings-v2-base-code')
-        self.reranker_model_name = self.model_config.get("reranker_model_path", 'Qwen/Qwen3-Reranker-0.6B')
+        self.docs_model_name = resolve_model_path(
+            self.model_config.get("docs_model_path", 'intfloat/multilingual-e5-large-instruct'))
+        self.code_model_name = resolve_model_path(
+            self.model_config.get("code_model_path", 'jinaai/jina-embeddings-v2-base-code'))
+        self.reranker_model_name = resolve_model_path(
+            self.model_config.get("reranker_model_path", 'cross-encoder/ms-marco-MiniLM-L6-v2'))
 
         self.code_model, self.docs_model, self.reranker = None, None, None
 
@@ -145,7 +168,6 @@ class HybridRAGQueryEngine:
         """Generates a hypothetical document to improve search relevance (HyDE)."""
         print("Transforming query with HyDE...")
 
-        # --- NEW: Improved HyDE Prompt ---
         messages = [
             {"role": "system",
              "content": "You are a technical writing expert. Your task is to generate a detailed, self-contained document that comprehensively answers the following user question. This document will be used for a vector search. Begin directly with the content, without any preamble like 'Here is the answer'."},
@@ -160,7 +182,7 @@ class HybridRAGQueryEngine:
         print(f"HyDE Response: {hypothetical_answer[:100]}...")
         return hypothetical_answer
 
-    def retrieve(self, query: str, k: int = 20) -> list:
+    def retrieve(self, query: str, k: int) -> list:
         """Performs retrieval from ChromaDB collections and unloads models immediately."""
         all_results = []
         if self.has_code and self.code_collection:
@@ -184,7 +206,7 @@ class HybridRAGQueryEngine:
             self._unload_model('docs')
         return all_results
 
-    def rerank(self, query: str, chunks: list, top_k: int = 7) -> list:
+    def rerank(self, query: str, chunks: list, top_k: int) -> list:
         """Performs reranking and unloads the model immediately."""
         if not chunks: return []
 
@@ -195,7 +217,6 @@ class HybridRAGQueryEngine:
 
         pairs = [(query, chunk['text']) for chunk in chunks]
 
-        # Process pairs one by one to avoid batch size issues with no padding token
         scores = []
         for pair in pairs:
             score = self.reranker.predict([pair], show_progress_bar=False)
@@ -209,8 +230,6 @@ class HybridRAGQueryEngine:
     def generate_final_answer(self, context: list, history: list, llm_url: str, lang: str, model_name: str) -> Iterator[
         str]:
         """Generates a final answer as a stream, using an improved prompt structure with enhanced snippet presentation."""
-
-        # --- Enhanced System Prompt for Better Code/Document Snippet Integration ---
         system_prompt = f"""You are an expert-level technical AI assistant specializing in code analysis and documentation.
     Your persona is helpful, precise, and professional.
     You will be given a conversation history and a set of context snippets extracted from a knowledge base.
@@ -230,54 +249,34 @@ class HybridRAGQueryEngine:
     """
 
         messages = [{"role": "system", "content": system_prompt}]
-
-        # Add conversation history (excluding the last user message which is the current question)
         messages.extend(history[:-1])
 
-        # --- Enhanced Context Consolidation with Source Metadata ---
         context_str_parts = []
         source_files = set()
 
         for i, item in enumerate(context):
             source = item['source']
             source_files.add(source)
-
-            # Determine if this is likely code or documentation based on file extension
             file_ext = source.split('.')[-1].lower() if '.' in source else ''
             content_type = "CODE" if file_ext in ['py', 'js', 'java', 'cpp', 'c', 'h', 'ts', 'go', 'rs', 'php', 'rb',
                                                   'cs'] else "DOCUMENT"
-
             context_str_parts.append(f"--- {content_type} SNIPPET {i + 1} (from: {source}) ---\n{item['text']}")
 
         consolidated_context = "\n\n".join(context_str_parts)
-
-        # Create source summary for better context awareness
         source_summary = f"Available sources ({len(source_files)} files): {', '.join(sorted(source_files))}"
 
         final_user_prompt = f"""Here is the context I have retrieved from the knowledge base:
-
     {source_summary}
-
     <CONTEXT>
     {consolidated_context}
     </CONTEXT>
-
     Based on the conversation history and the context provided above, please answer this question comprehensively.
     Include relevant code snippets or documentation excerpts in your response with proper formatting.
-
     Question: "{history[-1]['content']}"
-
-    Instructions for your response:
-    - Start with a clear explanation
-    - Include relevant code/document snippets with proper formatting
-    - Use appropriate language syntax highlighting for code blocks
-    - Reference specific files when showing snippets
-    - Provide practical context and usage examples when applicable
     """
 
         messages.append({"role": "user", "content": final_user_prompt})
 
-        # Log the full messages payload before sending to LLM
         logging.info(f"Sending messages to LLM ({model_name}):")
         for msg in messages:
             logging.info(
@@ -321,15 +320,15 @@ class HybridRAGQueryEngine:
             if not llm_url or not model_name: raise ValueError("LLM URL and model name are required for HyDE.")
             transformed_query = self.transform_query_hyde(query, llm_url, model_name)
 
-        candidate_chunks = self.retrieve(transformed_query, k=20)
+        candidate_chunks = self.retrieve(transformed_query, k=self.retrieval_k)
         if not candidate_chunks: return []
 
         if use_reranker:
-            print("Reranking context...")
-            return self.rerank(query, candidate_chunks, top_k=7)
+            print(f"Reranking context... (top {self.reranker_top_k} of {len(candidate_chunks)})")
+            return self.rerank(query, candidate_chunks, top_k=self.reranker_top_k)
         else:
             print("Skipping reranker.")
-            return candidate_chunks[:7]
+            return candidate_chunks[:self.reranker_top_k]
 
     def stream_answer_with_context(self, history: list, context: list, llm_url: str, lang_choice: str,
                                    model_name: str) -> Iterator[str]:
