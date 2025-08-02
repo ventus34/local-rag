@@ -1,0 +1,26 @@
+{
+    "models": {
+        "code_model_path": "sentence-transformers/all-MiniLM-L6-v2",
+        "docs_model_path": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        "reranker_model_path": "cross-encoder/ms-marco-MiniLM-L6-v2"
+    },
+    "endpoints": {
+        "lm_studio_url": "http://localhost:1234/v1/chat/completions",
+        "ollama_url": "http://localhost:11434/v1/chat/completions"
+    },
+    "hardware": {
+        "device": "GPU (CUDA)",
+        "fp16": false
+    },
+    "default_model": "local-model",
+    "project_paths": {
+    },
+    "retrieval": {
+        "chunk_size": 768,
+        "chunk_overlap": 100,
+        "retrieval_candidates_k": 40,
+        "reranker_top_k": 15,
+        "indexing_batch_size": 100,
+        "indexing_file_batch_size": 50
+    }
+}
